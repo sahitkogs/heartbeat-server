@@ -1,0 +1,26 @@
+# Binaries
+heartbeat-server
+hb-smoketest
+*.exe
+
+# Build artifacts
+/build/
+/bin/
+/dist/
+
+# Local data
+*.db
+*.db-journal
+fcm-service-account.json
+*.pem
+*.key
+*.crt
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
