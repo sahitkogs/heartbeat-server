@@ -65,6 +65,10 @@ func RequireSignature(next http.Handler) http.Handler {
 			return
 		}
 
+		// Cap the body to a generous-but-bounded size. All v3 endpoints accept
+		// small JSON; anything larger is malicious or a buggy client.
+		const maxBody = 64 * 1024
+		r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "read body", http.StatusBadRequest)

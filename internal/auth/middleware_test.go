@@ -87,3 +87,20 @@ func TestClientPubkeyFromContextNilWhenAbsent(t *testing.T) {
 		t.Fatal("expected nil when no pubkey in context")
 	}
 }
+
+func TestMiddlewareRejectsOversizedBody(t *testing.T) {
+	kp, _ := keys.Generate()
+	// 100 KB body — over our 64 KB cap.
+	body := bytes.Repeat([]byte{'x'}, 100*1024)
+	req := signedRequest(t, kp, http.MethodPost, "/foo", body, time.Now())
+
+	handler := RequireSignature(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("inner handler should not be called for oversized body")
+	}))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected non-200, got 200")
+	}
+}
