@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"net/http"
+	"sync"
 	"time"
 
 	"nhooyr.io/websocket"
@@ -111,8 +112,12 @@ func authenticateWSUpgrade(r *http.Request) (ed25519.PublicKey, error) {
 }
 
 // wsSession is the Hub Connection implementation backed by a real WebSocket.
+// nhooyr.io/websocket does not allow concurrent writes; writeMu serializes
+// all writes through this session (frame replies from the reader goroutine,
+// pushes delivered from other sessions' goroutines).
 type wsSession struct {
-	conn *websocket.Conn
+	conn    *websocket.Conn
+	writeMu sync.Mutex
 }
 
 func (s *wsSession) Push(envelope []byte, from string) error {
@@ -124,6 +129,8 @@ func (s *wsSession) Close() {
 }
 
 func (s *wsSession) write(ctx context.Context, b []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return s.conn.Write(ctx, websocket.MessageText, b)
