@@ -1,0 +1,50 @@
+services:
+  heartbeat-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: heartbeat-server:latest
+    restart: unless-stopped
+    environment:
+      HB_FCM_CREDENTIALS: /run/secrets/fcm.json
+    volumes:
+      - hb-data:/var/lib/heartbeat
+      - ./fcm-service-account.json:/run/secrets/fcm.json:ro
+    command:
+      - "-addr"
+      - ":8080"
+      - "-db"
+      - "/var/lib/heartbeat/phonebook.db"
+      - "-fcm-creds"
+      - "/run/secrets/fcm.json"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      HB_HOST: ${HB_HOST}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - heartbeat-server
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      HB_TURN_USER: ${HB_TURN_USER}
+      HB_TURN_PASS: ${HB_TURN_PASS}
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+
+volumes:
+  hb-data:
+  caddy-data:
+  caddy-config:

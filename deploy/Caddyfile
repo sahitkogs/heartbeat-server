@@ -1,0 +1,4 @@
+# Replace HB_HOST with your domain in .env before deploying.
+{$HB_HOST} {
+    reverse_proxy heartbeat-server:8080
+}
