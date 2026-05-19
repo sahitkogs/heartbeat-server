@@ -31,11 +31,15 @@ func (h *Hub) Add(pubkey string, c Connection) {
 	h.conns[pubkey] = c
 }
 
-// Remove unregisters the connection for pubkey-hex.
-func (h *Hub) Remove(pubkey string) {
+// Remove unregisters c as the connection for pubkey-hex. It only deletes
+// the map entry if it currently points at c — so a stale goroutine
+// unwinding after being replaced does NOT remove its successor.
+func (h *Hub) Remove(pubkey string, c Connection) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	delete(h.conns, pubkey)
+	if cur, ok := h.conns[pubkey]; ok && cur == c {
+		delete(h.conns, pubkey)
+	}
 }
 
 // IsOnline returns whether pubkey-hex has a registered connection.
@@ -56,8 +60,8 @@ func (h *Hub) DeliverTo(recipientPubkey string, envelope []byte, fromPubkey stri
 		return false
 	}
 	if err := c.Push(envelope, fromPubkey); err != nil {
-		// On push error, treat connection as dead and remove.
-		h.Remove(recipientPubkey)
+		// On push error, treat connection as dead and remove (only if it's still us).
+		h.Remove(recipientPubkey, c)
 		return false
 	}
 	return true

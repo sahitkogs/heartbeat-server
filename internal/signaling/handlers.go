@@ -42,7 +42,7 @@ func (h *Handlers) Signal(w http.ResponseWriter, r *http.Request) {
 
 	sess := &wsSession{conn: conn}
 	h.Hub.Add(pubHex, sess)
-	defer h.Hub.Remove(pubHex)
+	defer h.Hub.Remove(pubHex, sess)
 
 	ctx := r.Context()
 	for {
