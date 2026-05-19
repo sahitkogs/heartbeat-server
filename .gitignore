@@ -1,6 +1,6 @@
 # Binaries
-heartbeat-server
-hb-smoketest
+/heartbeat-server
+/hb-smoketest
 *.exe
 
 # Build artifacts
