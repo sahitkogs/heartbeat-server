@@ -45,7 +45,16 @@ func (h *Handlers) Signal(w http.ResponseWriter, r *http.Request) {
 	h.Hub.Add(pubHex, sess)
 	defer h.Hub.Remove(pubHex, sess)
 
-	ctx := r.Context()
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// Keepalive: ping every pingInterval; if a ping doesn't pong within
+	// pingTimeout, close the conn so the reader unblocks and Hub.Remove fires.
+	// Without this a recipient who lost wifi (or whose process was killed) can
+	// linger in the hub until Linux TCP gives up (hours by default), and
+	// senders never get recipient_offline → wake fallback never fires.
+	go pingLoop(ctx, conn)
+
 	for {
 		typ, data, err := conn.Read(ctx)
 		if err != nil {
@@ -55,6 +64,33 @@ func (h *Handlers) Signal(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		h.handleFrame(ctx, sess, pubHex, data)
+	}
+}
+
+const (
+	pingInterval = 15 * time.Second
+	pingTimeout  = 5 * time.Second
+)
+
+// pingLoop sends periodic application-level pings and closes the underlying
+// connection if a pong doesn't arrive in time. Returns when ctx is cancelled
+// (caller-side close) or on the first failed ping (peer-side disconnect).
+func pingLoop(ctx context.Context, conn *websocket.Conn) {
+	t := time.NewTicker(pingInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
+			err := conn.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				_ = conn.Close(websocket.StatusPolicyViolation, "ping timeout")
+				return
+			}
+		}
 	}
 }
 
