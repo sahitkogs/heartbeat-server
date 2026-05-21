@@ -31,3 +31,20 @@ func TestBuildDeliverFrame(t *testing.T) {
 		t.Fatalf("unexpected frame: %v", out)
 	}
 }
+
+func TestBuildErrorFrameForPeer(t *testing.T) {
+	got := BuildErrorFrameForPeer("recipient_offline", "bob-pub")
+	var out map[string]string
+	if err := json.Unmarshal(got, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out["type"] != "error" || out["code"] != "recipient_offline" {
+		t.Fatalf("unexpected frame: %v", out)
+	}
+	if out["to"] != "bob-pub" {
+		t.Fatalf("missing or wrong `to`: %v", out)
+	}
+	if out["message"] != "bob-pub" {
+		t.Fatalf("expected `message` to mirror peer pubkey for backwards-compat, got %q", out["message"])
+	}
+}

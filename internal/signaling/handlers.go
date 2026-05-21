@@ -76,7 +76,7 @@ func (h *Handlers) handleFrame(ctx context.Context, sess *wsSession, fromPub str
 			return
 		}
 		if !h.Hub.DeliverTo(f.To, env, fromPub) {
-			_ = sess.write(ctx, BuildErrorFrame("recipient_offline", f.To))
+			_ = sess.write(ctx, BuildErrorFrameForPeer("recipient_offline", f.To))
 		}
 	default:
 		_ = sess.write(ctx, BuildErrorFrame("unknown_type", f.Type))

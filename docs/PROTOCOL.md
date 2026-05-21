@@ -53,10 +53,10 @@ Server → Client:
 { "type": "pong" }
 { "type": "online_status", "pubkey": "hex32", "online": true }
 { "type": "deliver", "from": "hex32", "envelope": "base64" }
-{ "type": "error", "code": "string", "message": "string" }
+{ "type": "error", "code": "string", "message": "string", "to": "hex32 (optional)" }
 ```
 
-The server stores **no envelopes**; if the recipient is offline at the moment of a `send`, the server replies with `error code=recipient_offline`. The client then falls back to `POST /v1/wake`.
+The server stores **no envelopes**; if the recipient is offline at the moment of a `send`, the server replies with `error code=recipient_offline`, with the offline peer's pubkey in `to` (and mirrored in `message` for older clients). The client uses `to` to drive a `POST /v1/wake` fallback for the right peer.
 
 ### `GET /healthz`
 No auth. Returns `200 OK` with `{ "ok": true, "version": "..." }`.

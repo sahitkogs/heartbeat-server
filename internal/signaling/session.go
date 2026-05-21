@@ -44,6 +44,22 @@ func BuildErrorFrame(code, message string) []byte {
 	return b
 }
 
+// BuildErrorFrameForPeer is the variant used when an error pertains to a
+// specific peer (currently: recipient_offline). The `to` field lets clients
+// drive a wake-fallback for the right peer without parsing it back out of
+// `message`. `message` is kept set to the same pubkey for backwards
+// compatibility with pre-T5 clients that only read `message`.
+func BuildErrorFrameForPeer(code, peerPubkeyHex string) []byte {
+	out := map[string]string{
+		"type":    "error",
+		"code":    code,
+		"message": peerPubkeyHex,
+		"to":      peerPubkeyHex,
+	}
+	b, _ := json.Marshal(out)
+	return b
+}
+
 // BuildOnlineStatusFrame constructs an online_status reply.
 func BuildOnlineStatusFrame(pubkey string, online bool) []byte {
 	out := map[string]any{
