@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -13,6 +14,13 @@ import (
 	"github.com/sahitkogs/heartbeat-server/internal/auth"
 	"github.com/sahitkogs/heartbeat-server/internal/keys"
 )
+
+func shortPub(p string) string {
+	if len(p) < 12 {
+		return p
+	}
+	return p[:6] + ".." + p[len(p)-6:]
+}
 
 // Handlers serves the /v1/signal WebSocket endpoint.
 type Handlers struct {
@@ -43,7 +51,11 @@ func (h *Handlers) Signal(w http.ResponseWriter, r *http.Request) {
 
 	sess := &wsSession{conn: conn}
 	h.Hub.Add(pubHex, sess)
-	defer h.Hub.Remove(pubHex, sess)
+	log.Printf("[ws] connect pub=%s", shortPub(pubHex))
+	defer func() {
+		h.Hub.Remove(pubHex, sess)
+		log.Printf("[ws] disconnect pub=%s", shortPub(pubHex))
+	}()
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -53,7 +65,7 @@ func (h *Handlers) Signal(w http.ResponseWriter, r *http.Request) {
 	// Without this a recipient who lost wifi (or whose process was killed) can
 	// linger in the hub until Linux TCP gives up (hours by default), and
 	// senders never get recipient_offline → wake fallback never fires.
-	go pingLoop(ctx, conn)
+	go pingLoop(ctx, conn, pubHex)
 
 	for {
 		typ, data, err := conn.Read(ctx)
@@ -67,15 +79,22 @@ func (h *Handlers) Signal(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Application-level WS keepalive. Tuned aggressively (vs. the prior 15s/5s
+// pair) so a force-stopped receiver is detected and removed from the hub
+// within ~7s instead of ~20s. Outside that window, DeliverTo's write
+// succeeds at the OS level even when the peer is dead (TCP RST hasn't
+// fired yet), causing sends to land in a black hole until next ping.
+// True elimination of the race requires application-level message acks;
+// this is a pragmatic interim fix tracked as Phase 10.4.1 BUG.6.
 const (
-	pingInterval = 15 * time.Second
-	pingTimeout  = 5 * time.Second
+	pingInterval = 5 * time.Second
+	pingTimeout  = 2 * time.Second
 )
 
 // pingLoop sends periodic application-level pings and closes the underlying
 // connection if a pong doesn't arrive in time. Returns when ctx is cancelled
 // (caller-side close) or on the first failed ping (peer-side disconnect).
-func pingLoop(ctx context.Context, conn *websocket.Conn) {
+func pingLoop(ctx context.Context, conn *websocket.Conn, pubHex string) {
 	t := time.NewTicker(pingInterval)
 	defer t.Stop()
 	for {
@@ -87,6 +106,7 @@ func pingLoop(ctx context.Context, conn *websocket.Conn) {
 			err := conn.Ping(pingCtx)
 			cancel()
 			if err != nil {
+				log.Printf("[ws] ping_fail pub=%s err=%v — closing", shortPub(pubHex), err)
 				_ = conn.Close(websocket.StatusPolicyViolation, "ping timeout")
 				return
 			}
@@ -112,6 +132,7 @@ func (h *Handlers) handleFrame(ctx context.Context, sess *wsSession, fromPub str
 			return
 		}
 		if !h.Hub.DeliverTo(f.To, env, fromPub) {
+			log.Printf("[ws] deliver_offline from=%s to=%s", shortPub(fromPub), shortPub(f.To))
 			_ = sess.write(ctx, BuildErrorFrameForPeer("recipient_offline", f.To))
 		}
 	default:
