@@ -17,7 +17,7 @@ import (
 	"github.com/sahitkogs/heartbeat-server/internal/wake"
 )
 
-const version = "0.1.4-phase10.4.1-bug6"
+const version = "0.1.5-phase10.4.2-bug6-server-wake"
 
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
