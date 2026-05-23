@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
 	"log"
 	"net/http"
 	"sync"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/sahitkogs/heartbeat-server/internal/auth"
 	"github.com/sahitkogs/heartbeat-server/internal/keys"
+	"github.com/sahitkogs/heartbeat-server/internal/phonebook"
+	"github.com/sahitkogs/heartbeat-server/internal/wake"
 )
 
 func shortPub(p string) string {
@@ -23,13 +26,27 @@ func shortPub(p string) string {
 }
 
 // Handlers serves the /v1/signal WebSocket endpoint.
+//
+// Book + Sender are optional dependencies for the server-side wake fallback:
+// when DeliverTo fails because the recipient is offline, the handler will
+// look up the recipient's FCM token and fire a wake push directly, instead
+// of relying on the client to POST /v1/wake afterward. That client round-
+// trip historically dropped two categories of sends — bundle pre-keys (not
+// queued for wake on the client) and any send after the sender's own WS
+// died (no recipient_offline error reaches a dead WS). Wiring Book + Sender
+// here closes both gaps without requiring a client update.
+//
+// Pass nil for either to disable the server-side wake (useful for tests).
 type Handlers struct {
-	Hub *Hub
+	Hub    *Hub
+	Book   *phonebook.Store
+	Sender *wake.Sender
 }
 
-// NewHandlers constructs Handlers around an existing Hub.
-func NewHandlers(h *Hub) *Handlers {
-	return &Handlers{Hub: h}
+// NewHandlers constructs Handlers around an existing Hub. Book + Sender are
+// optional — pass nil to skip the server-side wake fallback.
+func NewHandlers(h *Hub, book *phonebook.Store, sender *wake.Sender) *Handlers {
+	return &Handlers{Hub: h, Book: book, Sender: sender}
 }
 
 // Signal upgrades to WebSocket and runs the session loop.
@@ -134,10 +151,48 @@ func (h *Handlers) handleFrame(ctx context.Context, sess *wsSession, fromPub str
 		if !h.Hub.DeliverTo(f.To, env, fromPub) {
 			log.Printf("[ws] deliver_offline from=%s to=%s", shortPub(fromPub), shortPub(f.To))
 			_ = sess.write(ctx, BuildErrorFrameForPeer("recipient_offline", f.To))
+			h.wakeOfflineRecipient(ctx, fromPub, f.To, env)
 		}
 	default:
 		_ = sess.write(ctx, BuildErrorFrame("unknown_type", f.Type))
 	}
+}
+
+// wakeOfflineRecipient fires an FCM push to wake the offline recipient. The
+// FCM payload mirrors the client-side wake_client.dart format:
+//
+//	payload = senderPubkeyBytes(32) || envelopeBytes
+//
+// so the recipient's background isolate strips the first 32 bytes to know
+// which libsignal session to decrypt with. Best-effort: any error is logged
+// and swallowed — we already sent recipient_offline to the sender, the wake
+// is an opportunistic improvement on top.
+func (h *Handlers) wakeOfflineRecipient(ctx context.Context, fromPubHex, toPubHex string, env []byte) {
+	if h.Book == nil || h.Sender == nil {
+		return
+	}
+	fromPubBytes, err := hex.DecodeString(fromPubHex)
+	if err != nil || len(fromPubBytes) != 32 {
+		log.Printf("[wake] skip bad_fromPub from=%s err=%v", shortPub(fromPubHex), err)
+		return
+	}
+	entry, err := h.Book.Lookup(ctx, toPubHex)
+	if err != nil {
+		if errors.Is(err, phonebook.ErrNotFound) {
+			log.Printf("[wake] skip no_phonebook to=%s", shortPub(toPubHex))
+			return
+		}
+		log.Printf("[wake] skip lookup_err to=%s err=%v", shortPub(toPubHex), err)
+		return
+	}
+	payload := make([]byte, 0, 32+len(env))
+	payload = append(payload, fromPubBytes...)
+	payload = append(payload, env...)
+	if err := h.Sender.Wake(ctx, entry.FCMToken, payload, false); err != nil {
+		log.Printf("[wake] fcm_fail from=%s to=%s err=%v", shortPub(fromPubHex), shortPub(toPubHex), err)
+		return
+	}
+	log.Printf("[wake] fcm_ok from=%s to=%s payloadBytes=%d", shortPub(fromPubHex), shortPub(toPubHex), len(payload))
 }
 
 func authenticateWSUpgrade(r *http.Request) (ed25519.PublicKey, error) {
