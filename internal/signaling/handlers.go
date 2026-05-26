@@ -186,25 +186,36 @@ type pusher interface {
 // connected session, deleting each row after a successful push. Aborts
 // on the first push failure; un-pushed rows remain queued for the next
 // connect.
+//
+// Delete runs on a context.WithoutCancel of the caller's ctx: once a Push
+// has succeeded, we must complete the matching Delete regardless of WS
+// upgrade tear-down — otherwise we lose at-most-once and rely on the
+// recipient to dedupe re-deliveries. LoadFor and Push still honor the
+// caller's ctx so an aborted upgrade exits the goroutine promptly.
 func (h *Handlers) flushOffline(ctx context.Context, sess pusher, pubHex string) {
 	if h.Offline == nil {
 		return
 	}
 	entries, err := h.Offline.LoadFor(ctx, pubHex)
 	if err != nil {
-		log.Printf("[offline] load_fail pub=%s err=%v", shortPub(pubHex), err)
+		// Quietly skip on ctx cancel — a fast connect/disconnect is normal
+		// (clients probe the relay) and the rows are still safely queued.
+		if !errors.Is(err, context.Canceled) {
+			log.Printf("[offline] load_fail pub=%s err=%v", shortPub(pubHex), err)
+		}
 		return
 	}
 	if len(entries) == 0 {
 		return
 	}
 	log.Printf("[offline] flush_start pub=%s count=%d", shortPub(pubHex), len(entries))
+	delCtx := context.WithoutCancel(ctx)
 	for _, e := range entries {
 		if err := sess.Push(e.Envelope, e.Sender); err != nil {
 			log.Printf("[offline] flush_abandon pub=%s err=%v", shortPub(pubHex), err)
 			return
 		}
-		if err := h.Offline.Delete(ctx, e.ID); err != nil {
+		if err := h.Offline.Delete(delCtx, e.ID); err != nil {
 			log.Printf("[offline] delete_fail id=%d err=%v", e.ID, err)
 			// Push already succeeded — keep going. Recipient dedup at the
 			// inner-envelope layer absorbs the duplicate on next flush.
