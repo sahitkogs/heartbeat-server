@@ -8,6 +8,7 @@
 package offline
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -72,3 +73,46 @@ const (
 	// MaxEnvelopeBytes bounds the size of a single queued envelope.
 	MaxEnvelopeBytes = 64 * 1024
 )
+
+// Enqueue appends an envelope for recipient. If the per-recipient cap is
+// hit, the oldest row for that recipient is evicted before insert.
+// ErrEnvelopeTooLarge if envelope exceeds MaxEnvelopeBytes.
+func (s *Store) Enqueue(ctx context.Context, recipient, sender string, envelope []byte) error {
+	if len(envelope) > MaxEnvelopeBytes {
+		return ErrEnvelopeTooLarge
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM offline_queue WHERE recipient_pubkey = ?`, recipient,
+	).Scan(&n); err != nil {
+		return fmt.Errorf("count for cap: %w", err)
+	}
+	if n >= MaxPerRecipient {
+		if _, err := s.db.ExecContext(ctx,
+			`DELETE FROM offline_queue WHERE id = (
+				SELECT id FROM offline_queue
+				WHERE recipient_pubkey = ?
+				ORDER BY enqueued_at ASC, id ASC LIMIT 1)`,
+			recipient,
+		); err != nil {
+			return fmt.Errorf("evict oldest: %w", err)
+		}
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO offline_queue (recipient_pubkey, sender_pubkey, envelope, enqueued_at)
+		 VALUES (?, ?, ?, ?)`,
+		recipient, sender, envelope, time.Now().UnixMilli())
+	if err != nil {
+		return fmt.Errorf("insert: %w", err)
+	}
+	return nil
+}
+
+// Depth returns the number of queued rows for recipient.
+func (s *Store) Depth(ctx context.Context, recipient string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM offline_queue WHERE recipient_pubkey = ?`, recipient,
+	).Scan(&n)
+	return n, err
+}
