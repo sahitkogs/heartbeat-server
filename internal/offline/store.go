@@ -117,6 +117,19 @@ func (s *Store) Depth(ctx context.Context, recipient string) (int, error) {
 	return n, err
 }
 
+// Sweep deletes all rows older than maxAge. Returns the number of rows
+// deleted. Intended to be called periodically by RunSweeper.
+func (s *Store) Sweep(ctx context.Context, maxAge time.Duration) (int, error) {
+	cutoff := time.Now().Add(-maxAge).UnixMilli()
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM offline_queue WHERE enqueued_at < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("sweep: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // Delete removes the row with the given ID. No error if it doesn't exist.
 func (s *Store) Delete(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM offline_queue WHERE id = ?`, id)

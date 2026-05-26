@@ -3,6 +3,7 @@ package offline
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -142,5 +143,46 @@ func TestEnqueueEvictsOldestAtCap(t *testing.T) {
 	last := entries[len(entries)-1].Envelope
 	if string(last) != "overflow" {
 		t.Fatalf("newest entry missing; last=%q", string(last))
+	}
+}
+
+func TestSweepDeletesOldRows(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	_ = s.Enqueue(ctx, "alice", "bob", []byte("old"))
+	_ = s.Enqueue(ctx, "alice", "bob", []byte("new"))
+	tenDaysAgo := time.Now().Add(-10 * 24 * time.Hour).UnixMilli()
+	if _, err := s.db.Exec(
+		`UPDATE offline_queue SET enqueued_at = ? WHERE envelope = ?`,
+		tenDaysAgo, []byte("old"),
+	); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	deleted, err := s.Sweep(ctx, 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected 1 deleted, got %d", deleted)
+	}
+	if n, _ := s.Depth(ctx, "alice"); n != 1 {
+		t.Fatalf("expected depth=1 after Sweep, got %d", n)
+	}
+	entries, _ := s.LoadFor(ctx, "alice")
+	if string(entries[0].Envelope) != "new" {
+		t.Fatalf("wrong row survived: %q", string(entries[0].Envelope))
+	}
+}
+
+func TestSweepNoOpWhenAllFresh(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	_ = s.Enqueue(ctx, "alice", "bob", []byte("env"))
+	deleted, err := s.Sweep(ctx, 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("expected 0 deleted, got %d", deleted)
 	}
 }
