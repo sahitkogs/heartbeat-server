@@ -115,3 +115,32 @@ func TestDeleteMissingIDNoError(t *testing.T) {
 		t.Fatalf("Delete of missing id should not error, got %v", err)
 	}
 }
+
+func TestEnqueueEvictsOldestAtCap(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for i := 0; i < MaxPerRecipient; i++ {
+		payload := []byte{byte(i), byte(i >> 8)}
+		if err := s.Enqueue(ctx, "alice", "bob", payload); err != nil {
+			t.Fatalf("Enqueue %d: %v", i, err)
+		}
+	}
+	if n, _ := s.Depth(ctx, "alice"); n != MaxPerRecipient {
+		t.Fatalf("expected depth=%d at fill, got %d", MaxPerRecipient, n)
+	}
+	if err := s.Enqueue(ctx, "alice", "bob", []byte("overflow")); err != nil {
+		t.Fatalf("overflow Enqueue: %v", err)
+	}
+	if n, _ := s.Depth(ctx, "alice"); n != MaxPerRecipient {
+		t.Fatalf("expected depth held at %d post-eviction, got %d", MaxPerRecipient, n)
+	}
+	entries, _ := s.LoadFor(ctx, "alice")
+	first := entries[0].Envelope
+	if first[0] != 1 || first[1] != 0 {
+		t.Fatalf("oldest entry not evicted; first remaining=%v", first)
+	}
+	last := entries[len(entries)-1].Envelope
+	if string(last) != "overflow" {
+		t.Fatalf("newest entry missing; last=%q", string(last))
+	}
+}
