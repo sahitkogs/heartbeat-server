@@ -12,16 +12,18 @@ import (
 
 	"github.com/sahitkogs/heartbeat-server/internal/auth"
 	"github.com/sahitkogs/heartbeat-server/internal/health"
+	"github.com/sahitkogs/heartbeat-server/internal/offline"
 	"github.com/sahitkogs/heartbeat-server/internal/phonebook"
 	"github.com/sahitkogs/heartbeat-server/internal/signaling"
 	"github.com/sahitkogs/heartbeat-server/internal/wake"
 )
 
-const version = "0.1.5-phase10.4.2-bug6-server-wake"
+const version = "0.2.0-offline-queue"
 
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	dbPath := flag.String("db", "/var/lib/heartbeat/phonebook.db", "phonebook SQLite path")
+	offDBPath := flag.String("offline-db", "/var/lib/heartbeat/offline-queue.db", "offline-queue SQLite path")
 	fcmCreds := flag.String("fcm-creds", os.Getenv("HB_FCM_CREDENTIALS"), "Firebase service-account JSON path")
 	dryFCM := flag.Bool("fcm-disabled", false, "if true, skip Firebase init and use a stub FCM client (refuses real sends)")
 	flag.Parse()
@@ -34,6 +36,17 @@ func main() {
 		log.Fatalf("open phonebook: %v", err)
 	}
 	defer book.Close()
+
+	offQ, err := offline.Open(*offDBPath)
+	if err != nil {
+		log.Fatalf("open offline queue: %v", err)
+	}
+	defer offQ.Close()
+
+	// Sweep rows older than 7 days every hour. Cheap (single indexed DELETE)
+	// and bounded by retention, so it never has more than ~a day's worth
+	// of expired rows to remove per tick.
+	go offline.RunSweeper(ctx, offQ, 1*time.Hour, 7*24*time.Hour)
 
 	var fcm wake.FCMClient
 	if *dryFCM || *fcmCreds == "" {
@@ -51,7 +64,7 @@ func main() {
 	hub := signaling.NewHub()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", health.Handler(version, nil))
+	mux.HandleFunc("/healthz", health.Handler(version, offQ))
 
 	pbHandlers := phonebook.NewHandlers(book)
 	mux.Handle("/v1/phonebook/register", auth.RequireSignature(http.HandlerFunc(pbHandlers.Register)))
@@ -60,7 +73,7 @@ func main() {
 	wkHandlers := wake.NewHandlers(book, sender)
 	mux.Handle("/v1/wake", auth.RequireSignature(http.HandlerFunc(wkHandlers.Wake)))
 
-	sigHandlers := signaling.NewHandlers(hub, book, &sender, nil)
+	sigHandlers := signaling.NewHandlers(hub, book, &sender, offQ)
 	mux.HandleFunc("/v1/signal", sigHandlers.Signal)
 
 	srv := &http.Server{
