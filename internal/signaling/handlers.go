@@ -173,6 +173,42 @@ func (h *Handlers) handleFrame(ctx context.Context, sess frameWriter, fromPub st
 	}
 }
 
+// pusher is the subset of wsSession needed by flushOffline.
+type pusher interface {
+	Push(envelope []byte, from string) error
+}
+
+// flushOffline drains the recipient's offline queue into the freshly-
+// connected session, deleting each row after a successful push. Aborts
+// on the first push failure; un-pushed rows remain queued for the next
+// connect.
+func (h *Handlers) flushOffline(ctx context.Context, sess pusher, pubHex string) {
+	if h.Offline == nil {
+		return
+	}
+	entries, err := h.Offline.LoadFor(ctx, pubHex)
+	if err != nil {
+		log.Printf("[offline] load_fail pub=%s err=%v", shortPub(pubHex), err)
+		return
+	}
+	if len(entries) == 0 {
+		return
+	}
+	log.Printf("[offline] flush_start pub=%s count=%d", shortPub(pubHex), len(entries))
+	for _, e := range entries {
+		if err := sess.Push(e.Envelope, e.Sender); err != nil {
+			log.Printf("[offline] flush_abandon pub=%s err=%v", shortPub(pubHex), err)
+			return
+		}
+		if err := h.Offline.Delete(ctx, e.ID); err != nil {
+			log.Printf("[offline] delete_fail id=%d err=%v", e.ID, err)
+			// Push already succeeded — keep going. Recipient dedup at the
+			// inner-envelope layer absorbs the duplicate on next flush.
+		}
+	}
+	log.Printf("[offline] flush_done pub=%s", shortPub(pubHex))
+}
+
 // enqueueOffline persists a ciphertext envelope for later flush when the
 // recipient's WS reconnects. Best-effort — failures log and are swallowed
 // so a sick disk doesn't take down message routing.

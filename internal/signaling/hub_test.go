@@ -1,6 +1,9 @@
 package signaling
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestHubTracksConnections(t *testing.T) {
 	h := NewHub()
@@ -65,11 +68,15 @@ func TestHubAddClosesOldConnection(t *testing.T) {
 }
 
 type fakeConn struct {
-	received [][]byte
-	closed   bool
+	received  [][]byte
+	closed    bool
+	failAfter int // if > 0, Push returns an error after N successful pushes
 }
 
 func (f *fakeConn) Push(env []byte, from string) error {
+	if f.failAfter > 0 && len(f.received) >= f.failAfter {
+		return errors.New("fakeConn: failAfter reached")
+	}
 	f.received = append(f.received, env)
 	return nil
 }

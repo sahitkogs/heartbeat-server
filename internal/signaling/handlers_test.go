@@ -57,6 +57,60 @@ func TestHandleFrameEnqueuesWhenRecipientOffline(t *testing.T) {
 	}
 }
 
+// pushSession adapts a fakeConn to the pusher interface flushOffline takes.
+type pushSession struct{ conn *fakeConn }
+
+func (p *pushSession) Push(env []byte, from string) error { return p.conn.Push(env, from) }
+
+func TestFlushOfflineDeliversAndDeletes(t *testing.T) {
+	q, err := offline.Open("file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("offline.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+	ctx := context.Background()
+	const pub = "cccc"
+	_ = q.Enqueue(ctx, pub, "sender1", []byte("env-a"))
+	_ = q.Enqueue(ctx, pub, "sender2", []byte("env-b"))
+
+	h := &Handlers{Hub: NewHub(), Offline: q}
+	recipient := &fakeConn{}
+	sess := &pushSession{conn: recipient}
+	h.flushOffline(ctx, sess, pub)
+
+	if len(recipient.received) != 2 {
+		t.Fatalf("expected 2 pushed, got %d", len(recipient.received))
+	}
+	if n, _ := q.Depth(ctx, pub); n != 0 {
+		t.Fatalf("expected queue drained, depth=%d", n)
+	}
+}
+
+func TestFlushOfflineStopsOnPushFailure(t *testing.T) {
+	q, err := offline.Open("file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("offline.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+	ctx := context.Background()
+	const pub = "dddd"
+	_ = q.Enqueue(ctx, pub, "s", []byte("a"))
+	_ = q.Enqueue(ctx, pub, "s", []byte("b"))
+	_ = q.Enqueue(ctx, pub, "s", []byte("c"))
+
+	h := &Handlers{Hub: NewHub(), Offline: q}
+	recipient := &fakeConn{failAfter: 1}
+	sess := &pushSession{conn: recipient}
+	h.flushOffline(ctx, sess, pub)
+
+	if len(recipient.received) != 1 {
+		t.Fatalf("expected 1 push before failure, got %d", len(recipient.received))
+	}
+	if n, _ := q.Depth(ctx, pub); n != 2 {
+		t.Fatalf("expected 2 rows still queued after abandoned flush, got %d", n)
+	}
+}
+
 func TestHandleFrameDoesNotEnqueueWhenRecipientOnline(t *testing.T) {
 	hub := NewHub()
 	q, err := offline.Open("file::memory:?cache=shared")
