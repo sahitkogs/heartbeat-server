@@ -117,6 +117,12 @@ func (s *Store) Depth(ctx context.Context, recipient string) (int, error) {
 	return n, err
 }
 
+// Delete removes the row with the given ID. No error if it doesn't exist.
+func (s *Store) Delete(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM offline_queue WHERE id = ?`, id)
+	return err
+}
+
 // LoadFor returns all rows for recipient ordered by enqueued_at ASC.
 // READ-ONLY: callers delete each row by ID via Delete after successful push.
 // This split lets an abandoned flush leave un-pushed rows in place.

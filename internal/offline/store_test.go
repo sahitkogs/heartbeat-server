@@ -95,3 +95,23 @@ func TestLoadForUnknownRecipient(t *testing.T) {
 		t.Fatalf("expected 0 entries, got %d", len(entries))
 	}
 }
+
+func TestDeleteRemovesRow(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	_ = s.Enqueue(ctx, "alice", "bob", []byte("env"))
+	entries, _ := s.LoadFor(ctx, "alice")
+	if err := s.Delete(ctx, entries[0].ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if n, _ := s.Depth(ctx, "alice"); n != 0 {
+		t.Fatalf("expected depth=0 after Delete, got %d", n)
+	}
+}
+
+func TestDeleteMissingIDNoError(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.Delete(context.Background(), 9999); err != nil {
+		t.Fatalf("Delete of missing id should not error, got %v", err)
+	}
+}
