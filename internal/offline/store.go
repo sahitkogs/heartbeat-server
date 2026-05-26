@@ -116,3 +116,30 @@ func (s *Store) Depth(ctx context.Context, recipient string) (int, error) {
 	).Scan(&n)
 	return n, err
 }
+
+// LoadFor returns all rows for recipient ordered by enqueued_at ASC.
+// READ-ONLY: callers delete each row by ID via Delete after successful push.
+// This split lets an abandoned flush leave un-pushed rows in place.
+func (s *Store) LoadFor(ctx context.Context, recipient string) ([]Entry, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, sender_pubkey, envelope, enqueued_at
+		   FROM offline_queue
+		  WHERE recipient_pubkey = ?
+		  ORDER BY enqueued_at ASC, id ASC`,
+		recipient)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+	var out []Entry
+	for rows.Next() {
+		var e Entry
+		var ts int64
+		if err := rows.Scan(&e.ID, &e.Sender, &e.Envelope, &ts); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		e.EnqueuedAt = time.UnixMilli(ts)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

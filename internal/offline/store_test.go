@@ -51,3 +51,47 @@ func TestEnqueueRejectsOversizeEnvelope(t *testing.T) {
 		t.Fatalf("got err %v, want ErrEnvelopeTooLarge", err)
 	}
 }
+
+func TestLoadForReturnsFIFO(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	_ = s.Enqueue(ctx, "alice", "bob", []byte("first"))
+	_ = s.Enqueue(ctx, "alice", "bob", []byte("second"))
+	_ = s.Enqueue(ctx, "alice", "carol", []byte("third"))
+	entries, err := s.LoadFor(ctx, "alice")
+	if err != nil {
+		t.Fatalf("LoadFor: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("got %d entries, want 3", len(entries))
+	}
+	if string(entries[0].Envelope) != "first" ||
+		string(entries[1].Envelope) != "second" ||
+		string(entries[2].Envelope) != "third" {
+		t.Fatalf("envelopes out of order: %v", entries)
+	}
+	if entries[0].Sender != "bob" || entries[2].Sender != "carol" {
+		t.Fatalf("sender field lost: %v", entries)
+	}
+}
+
+func TestLoadForDoesNotDelete(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	_ = s.Enqueue(ctx, "alice", "bob", []byte("env"))
+	_, _ = s.LoadFor(ctx, "alice")
+	if n, _ := s.Depth(ctx, "alice"); n != 1 {
+		t.Fatalf("LoadFor should not delete; depth=%d", n)
+	}
+}
+
+func TestLoadForUnknownRecipient(t *testing.T) {
+	s := newTestStore(t)
+	entries, err := s.LoadFor(context.Background(), "nobody")
+	if err != nil {
+		t.Fatalf("LoadFor: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected 0 entries, got %d", len(entries))
+	}
+}
