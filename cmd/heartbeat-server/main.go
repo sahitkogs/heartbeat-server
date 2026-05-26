@@ -60,7 +60,7 @@ func main() {
 	wkHandlers := wake.NewHandlers(book, sender)
 	mux.Handle("/v1/wake", auth.RequireSignature(http.HandlerFunc(wkHandlers.Wake)))
 
-	sigHandlers := signaling.NewHandlers(hub, book, &sender)
+	sigHandlers := signaling.NewHandlers(hub, book, &sender, nil)
 	mux.HandleFunc("/v1/signal", sigHandlers.Signal)
 
 	srv := &http.Server{

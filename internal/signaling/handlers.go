@@ -14,6 +14,7 @@ import (
 
 	"github.com/sahitkogs/heartbeat-server/internal/auth"
 	"github.com/sahitkogs/heartbeat-server/internal/keys"
+	"github.com/sahitkogs/heartbeat-server/internal/offline"
 	"github.com/sahitkogs/heartbeat-server/internal/phonebook"
 	"github.com/sahitkogs/heartbeat-server/internal/wake"
 )
@@ -37,16 +38,23 @@ func shortPub(p string) string {
 // here closes both gaps without requiring a client update.
 //
 // Pass nil for either to disable the server-side wake (useful for tests).
+//
+// Offline is the SQLite-backed per-recipient queue (see internal/offline).
+// When set, undeliverable sends are persisted and re-flushed on the
+// recipient's next WS connect, closing the FCM-suppressed / force-stop
+// gap that wake alone can't cover. Pass nil to disable (tests / local dev).
 type Handlers struct {
-	Hub    *Hub
-	Book   *phonebook.Store
-	Sender *wake.Sender
+	Hub     *Hub
+	Book    *phonebook.Store
+	Sender  *wake.Sender
+	Offline *offline.Store
 }
 
-// NewHandlers constructs Handlers around an existing Hub. Book + Sender are
-// optional — pass nil to skip the server-side wake fallback.
-func NewHandlers(h *Hub, book *phonebook.Store, sender *wake.Sender) *Handlers {
-	return &Handlers{Hub: h, Book: book, Sender: sender}
+// NewHandlers constructs Handlers around an existing Hub. Book, Sender and
+// Offline are optional — pass nil to skip the server-side wake fallback or
+// the offline-queue persistence respectively.
+func NewHandlers(h *Hub, book *phonebook.Store, sender *wake.Sender, off *offline.Store) *Handlers {
+	return &Handlers{Hub: h, Book: book, Sender: sender, Offline: off}
 }
 
 // Signal upgrades to WebSocket and runs the session loop.
@@ -131,7 +139,13 @@ func pingLoop(ctx context.Context, conn *websocket.Conn, pubHex string) {
 	}
 }
 
-func (h *Handlers) handleFrame(ctx context.Context, sess *wsSession, fromPub string, data []byte) {
+// frameWriter is the subset of wsSession needed by handleFrame for replies.
+// Extracted so tests can drive handleFrame without a real WebSocket.
+type frameWriter interface {
+	write(ctx context.Context, b []byte) error
+}
+
+func (h *Handlers) handleFrame(ctx context.Context, sess frameWriter, fromPub string, data []byte) {
 	f, err := ParseClientFrame(data)
 	if err != nil {
 		_ = sess.write(ctx, BuildErrorFrame("bad_frame", err.Error()))
@@ -152,10 +166,25 @@ func (h *Handlers) handleFrame(ctx context.Context, sess *wsSession, fromPub str
 			log.Printf("[ws] deliver_offline from=%s to=%s", shortPub(fromPub), shortPub(f.To))
 			_ = sess.write(ctx, BuildErrorFrameForPeer("recipient_offline", f.To))
 			h.wakeOfflineRecipient(ctx, fromPub, f.To, env)
+			h.enqueueOffline(ctx, fromPub, f.To, env)
 		}
 	default:
 		_ = sess.write(ctx, BuildErrorFrame("unknown_type", f.Type))
 	}
+}
+
+// enqueueOffline persists a ciphertext envelope for later flush when the
+// recipient's WS reconnects. Best-effort — failures log and are swallowed
+// so a sick disk doesn't take down message routing.
+func (h *Handlers) enqueueOffline(ctx context.Context, fromPub, toPub string, env []byte) {
+	if h.Offline == nil {
+		return
+	}
+	if err := h.Offline.Enqueue(ctx, toPub, fromPub, env); err != nil {
+		log.Printf("[offline] enqueue_fail to=%s err=%v", shortPub(toPub), err)
+		return
+	}
+	log.Printf("[offline] enqueued to=%s envBytes=%d", shortPub(toPub), len(env))
 }
 
 // wakeOfflineRecipient fires an FCM push to wake the offline recipient. The
