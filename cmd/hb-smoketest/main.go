@@ -4,10 +4,11 @@
 //
 // Subcommands:
 //
-//	register     -- generate a fresh keypair, register a fake FCM token
-//	wake         -- send a /v1/wake to a recipient pubkey (dry-run)
-//	listen       -- open the /v1/signal WebSocket, print incoming frames
-//	send         -- open the /v1/signal WebSocket, send an envelope, exit
+//	register       -- generate a fresh keypair, register a fake FCM token
+//	wake           -- send a /v1/wake to a recipient pubkey (dry-run)
+//	listen         -- open the /v1/signal WebSocket, print incoming frames
+//	send           -- open the /v1/signal WebSocket, send an envelope, exit
+//	offline-queue  -- end-to-end test of the server-side offline queue
 package main
 
 import (
@@ -43,13 +44,15 @@ func main() {
 		cmdListen(os.Args[2:])
 	case "send":
 		cmdSend(os.Args[2:])
+	case "offline-queue":
+		cmdOfflineQueue(os.Args[2:])
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Println("usage: hb-smoketest <register|wake|listen|send> [flags]")
+	fmt.Println("usage: hb-smoketest <register|wake|listen|send|offline-queue> [flags]")
 	os.Exit(2)
 }
 
@@ -175,6 +178,101 @@ func wsConnect(url string, kp *keys.Keypair) *websocket.Conn {
 		log.Fatalf("dial: %v", err)
 	}
 	return conn
+}
+
+// cmdOfflineQueue exercises the server-side offline queue end-to-end:
+//
+//  1. A connects then immediately disconnects (proves A is reachable + leaves
+//     the hub).
+//  2. B connects, sends to A (recipient now offline), reads the
+//     recipient_offline error, disconnects.
+//  3. A reconnects — flushOffline should push the queued envelope within a
+//     few seconds.
+//  4. A reconnects once more — the queue must be drained (no re-delivery).
+//
+// The server is run with -fcm-disabled so wakeOfflineRecipient is a no-op;
+// neither A nor B needs a phonebook entry.
+func cmdOfflineQueue(args []string) {
+	fs := flag.NewFlagSet("offline-queue", flag.ExitOnError)
+	relay := fs.String("relay", "ws://localhost:8080/v1/signal", "WS relay URL")
+	_ = fs.Parse(args)
+
+	ctx := context.Background()
+	kpA, err := keys.Generate()
+	if err != nil {
+		log.Fatalf("[offline-queue] keygen A: %v", err)
+	}
+	kpB, err := keys.Generate()
+	if err != nil {
+		log.Fatalf("[offline-queue] keygen B: %v", err)
+	}
+	payload := []byte("hello-while-offline")
+
+	// Step 1: A connects briefly to prove reachability, then disconnects.
+	connA1 := wsConnect(*relay, kpA)
+	_ = connA1.Close(websocket.StatusNormalClosure, "")
+	log.Printf("[offline-queue] A connected+disconnected")
+	time.Sleep(200 * time.Millisecond)
+
+	// Step 2: B connects, sends to A, reads recipient_offline, disconnects.
+	connB := wsConnect(*relay, kpB)
+	sendFrame, _ := json.Marshal(map[string]string{
+		"type":     "send",
+		"to":       kpA.PublicHex(),
+		"envelope": base64.StdEncoding.EncodeToString(payload),
+	})
+	if err := connB.Write(ctx, websocket.MessageText, sendFrame); err != nil {
+		log.Fatalf("[offline-queue] B send write: %v", err)
+	}
+	rctx, rcancel := context.WithTimeout(ctx, 2*time.Second)
+	if _, reply, rerr := connB.Read(rctx); rerr == nil {
+		log.Printf("[offline-queue] B got reply: %s", string(reply))
+	}
+	rcancel()
+	_ = connB.Close(websocket.StatusNormalClosure, "")
+	time.Sleep(200 * time.Millisecond)
+
+	// Step 3: A reconnects, expects the queued envelope within 3s.
+	connA2 := wsConnect(*relay, kpA)
+	rctx, rcancel = context.WithTimeout(ctx, 3*time.Second)
+	_, msg, err := connA2.Read(rctx)
+	rcancel()
+	if err != nil {
+		log.Fatalf("[offline-queue] FAIL A did not receive queued envelope: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(msg, &got); err != nil {
+		log.Fatalf("[offline-queue] FAIL bad deliver JSON: %v body=%s", err, string(msg))
+	}
+	if got["type"] != "deliver" {
+		log.Fatalf("[offline-queue] FAIL unexpected frame type=%v body=%s", got["type"], string(msg))
+	}
+	if got["from"] != kpB.PublicHex() {
+		log.Fatalf("[offline-queue] FAIL wrong from=%v want=%s", got["from"], kpB.PublicHex())
+	}
+	envB64, _ := got["envelope"].(string)
+	envBytes, err := base64.StdEncoding.DecodeString(envB64)
+	if err != nil {
+		log.Fatalf("[offline-queue] FAIL bad envelope b64: %v", err)
+	}
+	if string(envBytes) != string(payload) {
+		log.Fatalf("[offline-queue] FAIL envelope mismatch got=%q want=%q", string(envBytes), string(payload))
+	}
+	log.Printf("[offline-queue] A received queued envelope OK")
+	_ = connA2.Close(websocket.StatusNormalClosure, "")
+	time.Sleep(300 * time.Millisecond)
+
+	// Step 4: A reconnects again — queue must be drained (no re-delivery).
+	connA3 := wsConnect(*relay, kpA)
+	rctx, rcancel = context.WithTimeout(ctx, 1*time.Second)
+	_, msg2, err := connA3.Read(rctx)
+	rcancel()
+	if err == nil {
+		log.Fatalf("[offline-queue] FAIL queue not drained, got re-delivery: %s", string(msg2))
+	}
+	_ = connA3.Close(websocket.StatusNormalClosure, "")
+
+	fmt.Println("PASS offline-queue")
 }
 
 func loadOrCreateKey(path string) *keys.Keypair {
