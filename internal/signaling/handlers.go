@@ -77,6 +77,10 @@ func (h *Handlers) Signal(w http.ResponseWriter, r *http.Request) {
 	sess := &wsSession{conn: conn}
 	h.Hub.Add(pubHex, sess)
 	log.Printf("[ws] connect pub=%s", shortPub(pubHex))
+	// Drain any persisted-while-offline envelopes in the background so the
+	// read loop isn't blocked. r.Context() cancellation aborts the flush if
+	// the upgrade tears down — un-pushed rows stay queued for the next connect.
+	go h.flushOffline(r.Context(), sess, pubHex)
 	defer func() {
 		h.Hub.Remove(pubHex, sess)
 		log.Printf("[ws] disconnect pub=%s", shortPub(pubHex))
