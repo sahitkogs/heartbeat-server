@@ -3,6 +3,13 @@ module github.com/sahitkogs/heartbeat-server
 go 1.26.3
 
 require (
+	firebase.google.com/go/v4 v4.20.0
+	google.golang.org/api v0.279.0
+	modernc.org/sqlite v1.50.1
+	nhooyr.io/websocket v1.8.17
+)
+
+require (
 	cel.dev/expr v0.25.2 // indirect
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.20.0 // indirect
@@ -13,7 +20,6 @@ require (
 	cloud.google.com/go/longrunning v1.0.0 // indirect
 	cloud.google.com/go/monitoring v1.29.0 // indirect
 	cloud.google.com/go/storage v1.62.1 // indirect
-	firebase.google.com/go/v4 v4.20.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.32.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.56.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.56.0 // indirect
@@ -54,7 +60,6 @@ require (
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	google.golang.org/api v0.279.0 // indirect
 	google.golang.org/appengine/v2 v2.0.6 // indirect
 	google.golang.org/genproto v0.0.0-20260511170946-3700d4141b60 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260511170946-3700d4141b60 // indirect
@@ -64,6 +69,4 @@ require (
 	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.50.1 // indirect
-	nhooyr.io/websocket v1.8.17 // indirect
 )

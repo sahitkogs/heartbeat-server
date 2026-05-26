@@ -1,5 +1,6 @@
 // Package phonebook persists (pubkey -> FCM token) entries in SQLite.
-// This is the only durable state the server holds.
+// Alongside the offline queue (see internal/offline), this is one of the
+// two pieces of durable state the server holds.
 package phonebook
 
 import (
