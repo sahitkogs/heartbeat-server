@@ -51,7 +51,7 @@ func main() {
 	hub := signaling.NewHub()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", health.Handler(version))
+	mux.HandleFunc("/healthz", health.Handler(version, nil))
 
 	pbHandlers := phonebook.NewHandlers(book)
 	mux.Handle("/v1/phonebook/register", auth.RequireSignature(http.HandlerFunc(pbHandlers.Register)))

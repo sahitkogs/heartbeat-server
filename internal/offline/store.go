@@ -117,6 +117,14 @@ func (s *Store) Depth(ctx context.Context, recipient string) (int, error) {
 	return n, err
 }
 
+// TotalDepth returns the total number of queued rows across all recipients.
+// Used by /healthz for a coarse operational signal.
+func (s *Store) TotalDepth(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM offline_queue`).Scan(&n)
+	return n, err
+}
+
 // Sweep deletes all rows older than maxAge. Returns the number of rows
 // deleted. Intended to be called periodically by RunSweeper.
 func (s *Store) Sweep(ctx context.Context, maxAge time.Duration) (int, error) {

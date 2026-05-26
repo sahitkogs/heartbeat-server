@@ -186,3 +186,18 @@ func TestSweepNoOpWhenAllFresh(t *testing.T) {
 		t.Fatalf("expected 0 deleted, got %d", deleted)
 	}
 }
+
+func TestTotalDepth(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	_ = s.Enqueue(ctx, "alice", "x", []byte("1"))
+	_ = s.Enqueue(ctx, "bob", "x", []byte("2"))
+	_ = s.Enqueue(ctx, "bob", "x", []byte("3"))
+	n, err := s.TotalDepth(ctx)
+	if err != nil {
+		t.Fatalf("TotalDepth: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("got %d, want 3", n)
+	}
+}
